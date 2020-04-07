@@ -21,6 +21,9 @@ BR_Cidade <- brasilio(silent = T) %>% filter(place_type == "city") %>% select(-c
 BR_Estado <- brasilio(silent = T) %>% filter(place_type == "state") %>% select(-c("place_type", "is_last", "estimated_population_2019", "confirmed_per_100k_inhabitants", "death_rate"))
 Continentes <- read_delim('auxiliar/countryContinent.csv', col_types = cols(), delim = ";")
 UFs <- read_delim('auxiliar/estadosUF.csv', col_types = cols(), delim = ";")
+states <- st_read("auxiliar/MUF.shp")
+citys <- read_csv("auxiliar/municipios.csv", col_types = cols()) 
+#WRL_Map <- CSSEGISandData_us(silent = T) %>% select("Province.State" = Province_State, "Country.Region" = Country_Region, "data" = date, Lat, "Long" = Long_, casosAcumulados, obitosAcumulado)
 
 #pre-processing
 BR_Estado %>% 
@@ -38,9 +41,28 @@ WRL_Regiao %>%
   pivot_wider(names_from = data, values_from = c(casosAcumulados, obitosAcumulado, recuperadosAcumulado)) %>% 
   transmute("Province.State" = Province.State, "Country.Region" = Country.Region, "casosNovos" = .[[6]] - .[[5]], "obitosNovos" = .[[8]] - .[[7]], "recuperadosNovos" = .[[10]] - .[[9]]) -> WRL_Regiao_Hoje
 
+BR_Estado %>% 
+  group_by(state) %>% 
+  summarise(confirmed = max(confirmed, na.rm = T), deaths = max(deaths, na.rm = T)) %>% 
+  select(state, confirmed, deaths) -> BRM
+
+BR_Cidade %>% 
+  group_by(city, city_ibge_code) %>% 
+  summarise(confirmed = if(max(confirmed, na.rm = T) >= 0){max(confirmed, na.rm = T)}else{0},
+            deaths = if(max(deaths, na.rm = T) >= 0){max(deaths, na.rm = T)}else{0}) %>% 
+  left_join(citys, by = c("city_ibge_code" = "codigo_ibge")) %>% 
+  select(city,confirmed,deaths,latitude,longitude) -> BRC
+
+#WRL_Regiao %>%
+#  select(-recuperadosAcumulado) %>% 
+#  filter(Country.Region != "US") %>%
+#  bind_rows(WRL_Map) -> WRL_Map
+  
+
 #Listas
 escolhasUF <- setNames(UFs$UF, UFs$Estado)
 escolhas2 <- setNames(UFs$UF, UFs$UF)
+escolhascid <- setNames(BR_Cidade %>% select(city) %>% distinct() %>% arrange(city) %>%  as_vector(), BR_Cidade %>% select(city) %>% distinct() %>% arrange(city) %>% as_vector())
 paises <- setNames(unique(WRL_Pais$Country.Region), unique(WRL_Pais$Country.Region))
 
 #Shiny
@@ -52,14 +74,14 @@ ui <- dashboardPage(
       menuItem("Brasil", tabName = "bras", icon = icon("line-chart"),
        menuSubItem("Situação", tabName = "br", icon = icon("line-chart")),
        menuSubItem("Brasil (Por Estado)", tabName = "estado", icon = icon("line-chart")),
-       menuSubItem("Brasil (Por Cidade) - Em breve", tabName = "cidade", icon = icon("line-chart")),
+       menuSubItem("Brasil (Por Cidade)", tabName = "cidade", icon = icon("line-chart")),
        menuSubItem("Mapas", tabName = "mapBR", icon = icon("map"))),
       menuItem("Mundo",icon = icon("line-chart"),
-        menuItem("Por Continente", tabName = "cont", icon = icon("line-chart")),
-        menuItem("Por País", tabName = "paises", icon = icon("line-chart")),
-        menuItem("Mapas", tabName = "mapWRL", icon = icon("map")))
+        menuSubItem("Por Continente", tabName = "cont", icon = icon("line-chart")),
+        menuSubItem("Por País", tabName = "paises", icon = icon("line-chart")),
+        menuSubItem("Mapas", tabName = "mapWRL", icon = icon("map"))),
+      menuItem("Por Gustavo Nucci", icon = icon("paper-plane"), href = "https://www.linkedin.com/in/gustavo-v-nucci/", newtab = T)
       #,menuItem("Modelos Preditivos - Em breve", tabName = "pred", icon = icon("desktop"))
-      
     )
   ),
   dashboardBody(
@@ -202,6 +224,80 @@ ui <- dashboardPage(
                 )
               )
       ),
+      tabItem("cidade",
+              box(
+                title = "Cidades", status = "success", solidHeader = TRUE, width = 600,  
+                fluidPage(
+                  pickerInput(
+                    inputId = "cid", 
+                    label = "Escolha as cidades:", 
+                    choices = escolhascid, 
+                    options = list(
+                      `actions-box` = TRUE, 
+                      size = 10,
+                      `selected-text-format` = "count > 3"
+                    ), 
+                    multiple = TRUE
+                  )
+                )
+              ),
+              fluidRow(
+                column(6,
+                       box(
+                         title = "Tipo de dados",status = "warning", solidHeader = T, width = 12,
+                         "Selecione os tipos de dados:",
+                         checkboxGroupInput("statusCid", label = "", 
+                                            choiceNames = list("Casos", "Mortes"),
+                                            choiceValues = list("confirmed", "deaths"),
+                                            selected = "confirmed")
+                       )
+                ),
+                column(6,
+                       valueBoxOutput("CidMortos", width = 6),
+                       valueBoxOutput("CidCasos", width = 6))
+              ),
+              fluidPage(
+                box(
+                  title = "Gráfico", status = "info", solidHeader = TRUE, width = 600, 
+                  column(12,
+                         fluidRow(
+                           tabBox(id = 'grafsCid',width = 12,height = 400,
+                                  tabPanel("Escala Normal",
+                                           plotlyOutput("plotCid", height = 380)
+                                  ),
+                                  tabPanel("Escala Logarítimica",
+                                           plotlyOutput("plotCidLog", height = 380)
+                                  )
+                           )
+                         )
+                  )
+                )
+              )
+      ),
+      tabItem("mapBR",
+              column(12,
+                     fluidRow(
+                       box(width = 12, status = "success",
+                           radioButtons("stMBR", label = "Escolha:", 
+                                        choiceNames = list("Casos", "Mortes"),
+                                        choiceValues = list("confirmed", "deaths"),
+                                        inline = TRUE)
+                       )
+                     )
+              ),
+              tabBox(
+                title = "Mapas",
+                id = "mapGraf", 
+                width = 12,
+                height = 650,
+                tabPanel("Brasil (Por Estado)",
+                         girafeOutput("MPEstado", width = "100%", height = "500px")
+                ),
+                tabPanel("Brasil (Por Cidade)",
+                         leafletOutput("MPCidade", width = "100%", height = "500px"))
+              )
+              
+      ),
       tabItem("cont",
               box(
                 title = "Continente", status = "success", solidHeader = TRUE, width = 600,  
@@ -288,6 +384,29 @@ ui <- dashboardPage(
                   )
                 )
               )
+      ),
+      tabItem("mapWRL",
+              column(12,
+                     fluidRow(
+                       box(width = 12, status = "success",
+                           radioButtons("stMWRL", label = "Escolha:", 
+                                        choiceNames = list("Casos", "Mortes"),
+                                        choiceValues = list("confirmed", "deaths"),
+                                        inline = TRUE)
+                       )
+                     )
+              ),
+              column(12,
+                     fluidPage(
+                       box(width = 12, status = "info", solidHeader = T,
+                          title = "Mapa Mundial",
+                          h1("Em Breve!")
+                          #,leafletOutput("MWRL", width = "100%", height = "500px")
+
+                          )
+                        )
+                      )
+                
       )
     )
   )
@@ -339,13 +458,13 @@ server <- function(input, output) {
                group_by(Country.Region) %>% 
                summarise(casos = max(casosNovos, na.rm = T), mortes = max(obitosNovos, na.rm = T))  %>% 
                arrange(desc(casos)) %>% 
-               select(mortes) %>% 
+               select(casos) %>% 
                head(1),
-             subtitle = paste0("País com mais Mortos Hoje (",
+             subtitle = paste0("País com mais Casos Hoje (",
                                WRL_Pais %>% 
                                  group_by(Country.Region) %>% 
                                  summarise(casos = max(casosAcumulados, na.rm = T), mortes = max(obitosAcumulado, na.rm = T))  %>% 
-                                 arrange(desc(mortes)) %>% 
+                                 arrange(desc(casos)) %>% 
                                  select(Country.Region) %>% 
                                  head(1), ")"),
              color = "yellow", icon = icon("medkit"))
@@ -490,7 +609,6 @@ server <- function(input, output) {
       geom_point() + 
       theme_bw() +
       geom_line() +
-      ylim(0,10000) +
       xlab("Data") +
       ylab("Número") +
       labs(title = "Casos e Confirmados") +
@@ -501,7 +619,7 @@ server <- function(input, output) {
       rangeslider() %>%
       layout(hovermode = "x", 
              legend = list(x = 0.1, y = 0.9), 
-             yaxis = list(autorange = FALSE),
+             yaxis = list(autorange = TRUE),
              annotations = list(x = 1, y = -0.35, 
                                 text = paste("Atualizado em", format(now("Brazil/East"), "%d/%m/%Y - %H:%M:%S"), "-", "Fonte: Secretarias de Saúde (brasil.io)"),
                                 showarrow = F, xref='paper', yref='paper', xanchor='right', 
@@ -668,6 +786,82 @@ server <- function(input, output) {
             icon = icon("heartbeat"))
   })
   
+  output$plotCid <- renderPlotly({
+    BR_Cidade %>% 
+      select(city, date, confirmed, deaths) %>% 
+      pivot_longer(c(-city,-date),names_to = "status",values_to = "val") %>%
+      filter(city %in% input$cid, status %in% input$statusCid) %>% 
+      ggplot(aes(x = date, y = val, color = city, pch = status)) + 
+      geom_point() + 
+      geom_line() +
+      theme_bw() +
+      ylab("Número") +
+      labs(title = paste("Quantidade de Casos (Por Tipo) -", input$UF)) +
+      scale_x_date(date_breaks = "3 days") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) -> CidTY
+    
+    ggplotly(CidTY, tooltip = c(""), dynamicTicks = TRUE) %>%
+      rangeslider() %>%
+      layout(hovermode = "x", 
+             legend = list(x = 0.1, y = 0.9), 
+             yaxis = list(autorange = TRUE),
+             annotations = list(x = 1, y = -0.35, 
+                                text = paste("Atualizado em", format(now("Brazil/East"), "%d/%m/%Y - %H:%M:%S"), "-", "Fonte: Secretarias de Saúde (brasil.io)"),
+                                showarrow = F, xref='paper', yref='paper', xanchor='right', 
+                                yanchor='auto', xshift=0, yshift=0, font=list(size=8, color="black")))
+  })
+  
+  output$plotCidLog <- renderPlotly({
+    BR_Cidade %>% 
+      select(city, date, confirmed, deaths) %>% 
+      pivot_longer(c(-city,-date),names_to = "status",values_to = "val") %>%
+      filter(city %in% input$cid, status %in% input$statusCid) %>% 
+      ggplot(aes(x = date, y = val, color = city, pch = status)) +
+      geom_point() + 
+      geom_line() +
+      ylab("Log10") +
+      scale_y_log10() +
+      labs(title = paste("Quantidade de Casos (Por Tipo) -", input$UF)) +
+      scale_x_date(date_breaks = "3 days") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) -> LogCidTY
+    
+    ggplotly(LogCidTY, tooltip = c(""), dynamicTicks = TRUE) %>%
+      rangeslider() %>%
+      layout(hovermode = "x", 
+             legend = list(x = 0.1, y = 0.9), 
+             yaxis = list(autorange = TRUE),
+             annotations = list(x = 1, y = -0.35, 
+                                text =  paste("Atualizado em", format(now("Brazil/East"), "%d/%m/%Y - %H:%M:%S"), "-", "Fonte: Secretarias de Saúde (brasil.io)"),
+                                showarrow = F, xref='paper', yref='paper', xanchor='right', 
+                                yanchor='auto', xshift=0, yshift=0, font=list(size=8, color="black")))
+  })
+  
+  output$CidCasos <- renderValueBox({
+    valueBox(subtitle = "Casos Confirmados",
+             value = BR_Cidade %>%
+               filter(city %in% input$cid) %>% 
+               group_by(city) %>% 
+               summarize(confirmed = if(max(confirmed, na.rm = T) >= 0){max(confirmed, na.rm = T)}else{0}, 
+                         deaths = if(max(deaths, na.rm = T) >= 0){max(deaths, na.rm = T)}else{0}) %>%
+               select(confirmed) %>% 
+               sum(),
+             color = "blue",
+             icon = icon("medkit"))
+  })
+  
+  output$CidMortos <- renderValueBox({
+    valueBox(subtitle = "Mortos",
+             value = BR_Cidade %>%
+               filter(city %in% input$cid) %>% 
+               group_by(city) %>% 
+               summarize(confirmed = if(max(confirmed, na.rm = T) >= 0){max(confirmed, na.rm = T)}else{0}, 
+                         deaths = if(max(deaths, na.rm = T) >= 0){max(deaths, na.rm = T)}else{0}) %>%
+               select(confirmed) %>% 
+               sum(),
+             color = "red",
+             icon = icon("heartbeat"))
+  })
+  
   output$plotCont <- renderPlotly({
     WRL_Pais %>%
       full_join(Continentes, by = c("Country.Region" = "Pais")) %>%
@@ -820,33 +1014,33 @@ server <- function(input, output) {
     
   })
     
-    output$plotPais <- renderPlotly({
-      WRL_Pais %>% 
-        transmute("data" = data, "Country.Region" = Country.Region, "Casos" = casosAcumulados, "Mortes" = obitosAcumulado, "Recuperados" = recuperadosAcumulado) %>% 
-        pivot_longer(c(-data,-Country.Region), names_to = "status", values_to = "val") %>% 
-        filter(Country.Region %in% input$Pais, status == input$StatusPais) %>%
-        ggplot(aes(x = data, y = val, color = Country.Region)) + 
-        geom_point() + 
-        geom_line() +
-        theme_bw() +
-        ylab("Número") +
-        xlab("Data") +
-        scale_x_date(date_breaks = "3 days") +
-        labs(title = paste("Número de", input$StatusPais)) +
-        theme(axis.text.x = element_text(angle = 45, hjust = 1)) -> PaisTY
-      
-      ggplotly(PaisTY, tooltip = c("data", "val"), dynamicTicks = TRUE) %>%
-        rangeslider() %>%
-        layout(hovermode = "x", 
-               legend = list(x = 0.1, y = 0.9),
-               yaxis = list(autorange = TRUE),
-               annotations = list(x = 1, y = -0.35, 
-                                  text = paste("Atualizado em", format(now("Brazil/East"), "%d/%m/%Y - %H:%M:%S"), "-", "Fonte: John Hopkins CSSE"),
-                                  showarrow = F, xref='paper', yref='paper', xanchor='right', 
-                                  yanchor='auto', xshift=0, yshift=0, font=list(size=8, color="black")))
-    })
+  output$plotPais <- renderPlotly({
+    WRL_Pais %>% 
+      transmute("data" = data, "Country.Region" = Country.Region, "Casos" = casosAcumulados, "Mortes" = obitosAcumulado, "Recuperados" = recuperadosAcumulado) %>% 
+      pivot_longer(c(-data,-Country.Region), names_to = "status", values_to = "val") %>% 
+      filter(Country.Region %in% input$Pais, status == input$StatusPais) %>%
+      ggplot(aes(x = data, y = val, color = Country.Region)) + 
+      geom_point() + 
+      geom_line() +
+      theme_bw() +
+      ylab("Número") +
+      xlab("Data") +
+      scale_x_date(date_breaks = "3 days") +
+      labs(title = paste("Número de", input$StatusPais)) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) -> PaisTY
     
-    output$plotPaisLog <- renderPlotly({
+    ggplotly(PaisTY, tooltip = c("data", "val"), dynamicTicks = TRUE) %>%
+      rangeslider() %>%
+      layout(hovermode = "x", 
+             legend = list(x = 0.1, y = 0.9),
+             yaxis = list(autorange = TRUE),
+             annotations = list(x = 1, y = -0.35, 
+                                text = paste("Atualizado em", format(now("Brazil/East"), "%d/%m/%Y - %H:%M:%S"), "-", "Fonte: John Hopkins CSSE"),
+                                showarrow = F, xref='paper', yref='paper', xanchor='right', 
+                                yanchor='auto', xshift=0, yshift=0, font=list(size=8, color="black")))
+  })
+  
+  output$plotPaisLog <- renderPlotly({
       WRL_Pais %>% 
         transmute("data" = data, "Country.Region" = Country.Region, "Casos" = casosAcumulados, "Mortes" = obitosAcumulado, "Recuperados" = recuperadosAcumulado) %>% 
         pivot_longer(c(-data,-Country.Region), names_to = "status", values_to = "val") %>% 
@@ -872,6 +1066,58 @@ server <- function(input, output) {
                                   showarrow = F, xref='paper', yref='paper', xanchor='right', 
                                   yanchor='auto', xshift=0, yshift=0, font=list(size=8, color="black")))
     })
+  
+  output$MPEstado <- renderGirafe({
+    states %>% 
+      transmute("UF" = as.character(abbrv_s), "geom" = geometry) %>% 
+      full_join(BRM %>% mutate(confirmedFX = cut(confirmed, 
+                                                 breaks = c(0,9,24,49,99,249,499,999,Inf), 
+                                                 labels = c("<10", "10-24","25-49","50-99","100-249","250-499","500-999","1000+"),
+                                                 include.lowest = T),
+                               deathsFX = cut(deaths, 
+                                              breaks = c(0,9,24,49,99,249,499,999,Inf), 
+                                              labels = c("<10", "10-24","25-49","50-99","100-249","250-499","500-999","1000+"),
+                                              include.lowest = T)), by = c("UF" = "state")) -> map
+    
+    f <- if(input$stMBR == "confirmed"){map$confirmedFX}else{map$deathsFX}
+    n <- if(input$stMBR == "confirmed"){map$confirmed}else{map$deaths}
+    
+    map %>% 
+      ggplot() + 
+      geom_sf_interactive(aes(geometry = geom, tooltip = paste0(UF, "\n",input$stMBR, ": ", n), fill = f)) +
+      scale_fill_discrete_sequential(palette = "Teal") -> MPE
+    
+    ggiraph(ggobj = MPE, width_svg = 8, height_svg = 8)
+  })
+  
+  output$MPCidade <- renderLeaflet({
+    
+  s <- if(input$stMBR == "confirmed"){BRC$confirmed}else{BRC$deaths}
+    
+  leaflet(BRC %>% drop_na(), options = leafletOptions(zoomControl = T,
+                                                      minZoom = 3, dragging = T)) %>%
+    addProviderTiles("CartoDB.DarkMatter") %>% 
+    addCircleMarkers(lat = ~latitude,
+                     lng = ~longitude, 
+                     radius = ~sqrt(s),
+                     label = ~s,
+                     color = "blue")
+    
+  })
+  
+  #output$MWRL <- renderLeaflet({
+    
+  # s <- if(input$stMWRL == "confirmed"){WRL_Map$casosAcumulados}else{WRL_Map$obitosAcumulado}
+    
+  #  leaflet(WRL_Map %>% drop_na()) %>%
+  #    addProviderTiles("CartoDB.DarkMatter") %>% 
+  #    addCircleMarkers(lat = ~Lat,
+  #                     lng = ~Long, 
+  #                     radius = ~log10(s),
+  #                     label = ~s,
+  #                     color = "blue")
+  #  
+  #})
     
 }
 
